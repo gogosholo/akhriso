@@ -1,0 +1,57 @@
+# Akhriso book list.
+# Format: <Standard Ebooks book page URL> | <category> | <featured yes/no>
+# Categories: Fiction, Adventure, Mystery, Short Stories, Poetry, Philosophy, History, Children, Science
+# Books marked "learner" are short and easy to read, so good for English learners.
+
+# Fiction
+https://standardebooks.org/ebooks/jane-austen/pride-and-prejudice | Fiction | yes
+# learner
+https://standardebooks.org/ebooks/charles-dickens/a-christmas-carol | Fiction | yes
+https://standardebooks.org/ebooks/mary-shelley/frankenstein | Fiction | no
+https://standardebooks.org/ebooks/f-scott-fitzgerald/the-great-gatsby | Fiction | no
+https://standardebooks.org/ebooks/oscar-wilde/the-picture-of-dorian-gray | Fiction | no
+
+# Adventure
+https://standardebooks.org/ebooks/robert-louis-stevenson/treasure-island | Adventure | yes
+https://standardebooks.org/ebooks/jules-verne/around-the-world-in-eighty-days/george-makepeace-towle | Adventure | no
+https://standardebooks.org/ebooks/daniel-defoe/the-life-and-adventures-of-robinson-crusoe | Adventure | no
+# learner
+https://standardebooks.org/ebooks/jack-london/the-call-of-the-wild | Adventure | yes
+
+# Mystery
+https://standardebooks.org/ebooks/arthur-conan-doyle/the-adventures-of-sherlock-holmes | Mystery | yes
+https://standardebooks.org/ebooks/arthur-conan-doyle/the-hound-of-the-baskervilles | Mystery | no
+https://standardebooks.org/ebooks/g-k-chesterton/the-innocence-of-father-brown | Mystery | no
+# learner
+https://standardebooks.org/ebooks/robert-louis-stevenson/the-strange-case-of-dr-jekyll-and-mr-hyde | Mystery | no
+
+# Short Stories
+https://standardebooks.org/ebooks/saki/short-fiction | Short Stories | no
+https://standardebooks.org/ebooks/edgar-allan-poe/short-fiction | Short Stories | no
+
+# Poetry
+https://standardebooks.org/ebooks/john-keats/poetry | Poetry | no
+https://standardebooks.org/ebooks/walt-whitman/leaves-of-grass | Poetry | no
+https://standardebooks.org/ebooks/robert-frost/north-of-boston | Poetry | no
+
+# Philosophy
+https://standardebooks.org/ebooks/marcus-aurelius/meditations/george-long | Philosophy | yes
+https://standardebooks.org/ebooks/epictetus/short-works/george-long | Philosophy | no
+https://standardebooks.org/ebooks/seneca/dialogues/aubrey-stewart | Philosophy | no
+
+# History
+https://standardebooks.org/ebooks/frederick-douglass/narrative-of-the-life-of-frederick-douglass | History | yes
+https://standardebooks.org/ebooks/booker-t-washington/up-from-slavery | History | no
+https://standardebooks.org/ebooks/sun-tzu/the-art-of-war/lionel-giles | History | no
+
+# Children
+# learner
+https://standardebooks.org/ebooks/lewis-carroll/alices-adventures-in-wonderland/john-tenniel | Children | yes
+# learner
+https://standardebooks.org/ebooks/l-frank-baum/the-wonderful-wizard-of-oz | Children | no
+https://standardebooks.org/ebooks/frances-hodgson-burnett/the-secret-garden | Children | no
+https://standardebooks.org/ebooks/rudyard-kipling/the-jungle-book | Children | no
+
+# Science
+https://standardebooks.org/ebooks/charles-darwin/the-origin-of-species | Science | no
+https://standardebooks.org/ebooks/charles-darwin/the-voyage-of-the-beagle | Science | no

@@ -1,0 +1,69 @@
+name: Build catalog
+
+on:
+  push:
+    branches: [main]
+    paths: [catalog/books.txt]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one build at a time, and a running publish is never cancelled.
+concurrency:
+  group: build-catalog
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r catalog/requirements.txt
+
+      # Keeps earlier downloads, so a run only fetches newly added books
+      # instead of downloading every book from Standard Ebooks again.
+      - name: Restore earlier downloads
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            catalog/output
+            catalog/cache
+          key: catalog-${{ github.run_id }}
+          restore-keys: catalog-
+
+      - name: Build catalog
+        run: python catalog/build_catalog.py
+
+      - name: Save downloads
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            catalog/output
+            catalog/cache
+          key: catalog-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: catalog/output
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
