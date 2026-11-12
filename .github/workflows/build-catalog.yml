@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - catalog/books.json
+      - catalog/curation.json
       - catalog/build_catalog.py
   workflow_dispatch:
 
@@ -21,6 +22,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v7
 
@@ -32,8 +34,8 @@ jobs:
         working-directory: catalog
         run: python -m unittest test_build_catalog.py
 
-      # Keeps earlier downloads, so a run only fetches pages that changed on
-      # Wikisource instead of downloading every page again.
+      # Keeps the books built by earlier runs, so a run only downloads and
+      # rebuilds the books whose text or build script changed.
       - name: Restore earlier downloads
         uses: actions/cache/restore@v6
         with:

@@ -1,34 +1,44 @@
 # Akhriso catalog builder
 
-Turns the works listed in `books.json` into the static files the app downloads from GitHub Pages. Every book is a volume or part of a work on [Arabic Wikisource](https://ar.wikisource.org). This tool is separate from the Flutter app.
+Turns the books listed in `books.json` into the static files the app downloads from GitHub Pages. Every book is a classical Arabic text from the [OpenITI corpus](https://zenodo.org/records/17767721) (Open Islamicate Texts Initiative), release 2025.1.9. This tool is separate from the Flutter app.
 
 ## Rules
 
-- **The Arabic is copied exactly.** Titles and authors are written as Wikisource writes them, and the text is not edited.
-- **Only the layout changes.** The website's navigation, headers and download buttons are removed. The page's own headings are kept. In works marked `"headings": "kitab-bab"`, short lines that open with كتاب, باب or فصل (or a number and then one of them, such as "1 - باب …") also become headings, so the book has a table of contents. A line that only links back to the work's index page is removed.
-- **Every book credits its source.** The last page names each Wikisource page with its exact revision and the CC BY-SA 4.0 licence, in Somali. (That page's Somali needs a native speaker's review.)
+- **The Arabic is copied exactly.** The text is not edited. Titles and authors are OpenITI's, cleaned only of edition notes ("- ط العلمية") and long lineages; `curation.json` gives a few best-known books their usual names.
+- **Only the layout changes.** OpenITI's markup is removed: page numbers, milestones, Qur'an markers and notes left by programs. Its headings become the book's headings, and its two highest levels become the contents. A modern editor's notes (sections OpenITI marks `EDITOR` or `PARATEXT`) and notes in European languages are left out, since they are not the author's text.
+- **Every book credits its source.** The last page, in Somali, names OpenITI, the exact text file, the print edition it was made from (editor, publisher, year) and the CC BY-NC-SA 4.0 licence. (That page's Somali needs a native speaker's review.)
 
-## Add a book
+## How books are chosen (the 5S)
 
-Edit `books.json`. A work has a `category` (shown in the app as is; works with the same category are shown together), an `author`, an optional `headings` setting (`kitab-bab`; leave it out to use only the page's own headings), and its `books`. Each book has:
+`select_books.py` reads OpenITI's metadata and writes `books.json`. The build only makes what `books.json` lists, so the shelves change only when someone reruns the selection and commits the result.
+
+1. **Sort.** Only the primary (best) version of each book, in Arabic, by an author who died before 1350 AH (so the work is long out of copyright), proofread rather than raw OCR, and at least 2,000 words (5,000 for small hadith booklets). Texts from Shia, Zaydi and Ibadi libraries, or tagged as such, are left out. So are tafsir and Qur'an sciences for now, since they carry the Qur'an's text, and subjects outside the app's scope: poetry, literature, polemics, dictionaries, geography, medicine.
+2. **Set in order.** Each book goes on one of the twelve shelves listed in `curation.json`, in that order. The shelf comes from al-Maktaba al-Shamela's subject when the text came from Shamela, otherwise from OpenITI's genre tags or al-Jami' al-Kabir's subjects. Within a shelf, the best-known books come first, then the rest by the author's death year.
+3. **Shine.** The build refuses a book with markup left in its text, fewer than 1,000 words or an EPUB that isn't valid XML. It lists each such book and publishes the rest.
+4. **Standardize.** Every id is the OpenITI book URI in lower case with a hyphen for the dot (`0676nawawi-riyadsalihin`). The same work listed twice is kept once. Every EPUB has the same layout, contents and credits page.
+5. **Sustain.** The tests check the committed list: hundreds of books, every shelf stocked, shelves in order, popular ranks as curated, clean names, no tafsir and no modern authors. GitHub Actions runs the tests before every build.
+
+## curation.json
 
 | Field | Meaning |
 | --- | --- |
-| `id` | Lower-case letters, digits and hyphens. Never change it once published: the app keeps readers' progress by id. |
-| `title` | The Wikisource title of the volume or part. |
-| `featured` | `true` to show it on the app's Featured shelf. |
-| `popular` | Its place on the app's Popular shelf: 1 for the best known, then 2, 3 and so on, each used once. Leave it out to keep the book off that shelf. |
-| `pages` | The Wikisource pages that make the book, in order. |
-| `partsFrom` | Instead of `pages`: an index page whose links to pages starting with its own title are the parts, in order. Links to pages that don't exist are skipped. |
-| `partsPrefix` | With `partsFrom`, when the parts' titles start differently from the index page's (for example `كتاب الأم - المجلدالثاني1`). |
+| `shelves` | The shelves, in the order the app shows them. |
+| `popular` | The app's Popular shelf, best known first. |
+| `featured` | The app's Featured shelf. |
+| `add` | Books to include even though the rules leave them out, with their shelf. |
+| `shelf` | Books to move to another shelf. |
+| `exclude` | Books to leave out. |
+| `names` | A better-known title or author name for a book. |
 
-`partsFrom` must name the index page itself, not a redirect to it: the API returns a redirect page without its links. Muwatta's index is `الموطأ`, although its parts are named `موطأ الإمام مالك/…`.
+Books are named by their OpenITI book URI, such as `0676Nawawi.RiyadSalihin`. The selection stops with an error if `popular`, `featured` or `add` names a book that doesn't exist or was left out.
 
-Push to `main`, and the GitHub Action rebuilds and publishes the catalog. Remove a book by deleting it; its EPUB is removed on the next run.
+## Change the books
 
-## How it uses Wikisource
+```bash
+python3 select_books.py
+```
 
-The script reads pages through the MediaWiki API, the way Wikimedia asks scripts to: it names itself in its User-Agent, makes one request at a time with a 2 second gap, sends `maxlag`, and backs off when the API is busy. Each page's text is saved in `cache/` with its revision number, so a later run downloads only pages that changed. (Wikisource's robots.txt is for web crawlers; the API is the supported way for scripts.)
+Review the change to `books.json` with `git diff`, then push to `main`. The GitHub Action runs the tests, builds and publishes. Once published, never change a book's id: the app keeps readers' progress by id.
 
 ## Run locally
 
@@ -39,20 +49,10 @@ python3 -m unittest test_build_catalog.py
 ```
 
 ```bash
-python3 build_catalog.py
+python3 build_catalog.py --first 20
 ```
 
-To download every page again, ignoring the cache:
-
-```bash
-python3 build_catalog.py --force
-```
-
-To try the script without the network, save pages from `https://ar.wikisource.org/wiki/<title>` as `<title>.html` in a folder and run:
-
-```bash
-python3 build_catalog.py --offline <folder> --only al-umm-01
-```
+`--first N` or `--only <id> …` builds a few books without writing `catalog.json`. With no options it builds them all, which downloads about 2 GB of text. A later run rebuilds only books whose text changed, unless the script itself changed (then every book) or `--force` is given.
 
 ## Output
 
@@ -60,6 +60,6 @@ python3 build_catalog.py --offline <folder> --only al-umm-01
 | --- | --- |
 | `output/catalog.json` | The book list the app reads |
 | `output/epubs/<id>.epub` | The book, right-to-left, with its credits page |
-| `cache/<hash>.json` | Saved page text by revision. Not published |
+| `cache/` | OpenITI's metadata, Shamela subjects and earlier builds. Not published |
 
-The run ends with a summary of books OK and books failed with the reason. It exits with an error, without writing `catalog.json`, if no book succeeded or the total is over 900 MB. A book that fails is left out and the others continue.
+GitHub Pages sites can be at most 1 GB. If the books are over 950 MB, the build leaves out the biggest books from the last shelves until they fit, never a popular or featured book, and lists each one it left out.

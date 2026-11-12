@@ -1,12 +1,16 @@
 # Akhriso catalog
 
-The book catalog for the Akhriso reading app: Islamic books from
-[Arabic Wikisource](https://ar.wikisource.org) (ويكي مصدر), made into EPUB
-files, and the script that builds them.
+The book catalog for the Akhriso reading app: about two thousand classical
+Islamic books in Arabic from the
+[OpenITI corpus](https://zenodo.org/records/17767721) (Open Islamicate Texts
+Initiative), sorted onto twelve subject shelves and made into EPUB files, and
+the scripts that choose and build them.
 
-GitHub Actions runs the script whenever `catalog/books.json` or the script
-changes, and publishes the result with GitHub Pages. See `catalog/README.md`.
+GitHub Actions runs the build whenever `catalog/books.json`,
+`catalog/curation.json` or the build script changes, and publishes the result
+with GitHub Pages. See `catalog/README.md`.
 
-The texts come from Wikisource and are published under
-[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Each EPUB
-ends with a page naming its source pages and their revisions.
+The texts are published under
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), as
+OpenITI publishes them. Each EPUB ends with a page naming its source text and
+the print edition it was made from.

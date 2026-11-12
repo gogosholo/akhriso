@@ -1,0 +1,168 @@
+{
+ "about": "Hand-made choices for select_books.py. Books are named by their OpenITI book URI (author.title). See README.md.",
+ "shelves": [
+  "الحديث النبوي",
+  "شروح الحديث",
+  "الأذكار والرقائق والآداب",
+  "العقيدة",
+  "الفقه الشافعي",
+  "الفقه العام والمذاهب",
+  "أصول الفقه والقواعد",
+  "السيرة والشمائل",
+  "التاريخ",
+  "التراجم والطبقات",
+  "علوم الحديث",
+  "اللغة العربية"
+ ],
+ "popular": [
+  "0256Bukhari.Sahih",
+  "0261Muslim.Sahih",
+  "0676Nawawi.RiyadSalihin",
+  "0676Nawawi.ArbacunaNawawiyya",
+  "0593IbnHusaynShihabDinIsbahani.GhayaWaTaqrib",
+  "0676Nawawi.Adhkar",
+  "0275AbuDawudSijistani.Sunan",
+  "0279Tirmidhi.Sunan",
+  "0303Nasai.SunanSughra",
+  "0273IbnMaja.Sunan",
+  "0179MalikIbnAnas.Muwatta",
+  "0852IbnHajarCasqalani.BulughMaram",
+  "0918IbnQasimShamsDinGhazzi.FathQarib",
+  "0505Ghazali.BidayatHidaya",
+  "0213IbnHisham.SiraNabawiyya",
+  "0279Tirmidhi.ShamailMuhammadiyya",
+  "0676Nawawi.MinhajTalibin",
+  "0769IbnLuluShihabDinIbnNaqibShafici.CumdatSalik",
+  "0829TaqiDinDimashqiHisni.KifayatAkhyar",
+  "0751IbnQayyimJawziyya.ZadMacad",
+  "0774IbnKathir.QisasAnbiya",
+  "0505Ghazali.IhyaCulumDin",
+  "0256Bukhari.AdabMufrad",
+  "0656IbnCabdQawiMundhiri.TarghibWaTarhib",
+  "0544QadiCiyad.Shifa",
+  "0204Shafici.Umm",
+  "0241IbnHanbal.Musnad",
+  "0676Nawawi.MinhajFiSharhMuslim",
+  "0852IbnHajarCasqalani.FathBari",
+  "0774IbnKathir.Bidaya"
+ ],
+ "featured": [
+  "0676Nawawi.ArbacunaNawawiyya",
+  "0593IbnHusaynShihabDinIsbahani.GhayaWaTaqrib",
+  "0676Nawawi.RiyadSalihin",
+  "0505Ghazali.BidayatHidaya",
+  "0918IbnQasimShamsDinGhazzi.FathQarib",
+  "0279Tirmidhi.ShamailMuhammadiyya",
+  "0676Nawawi.Tibyan",
+  "0660SultanCulamaCizzDinDimashqi.QawacidAhkam"
+ ],
+ "add": {
+  "0774IbnKathir.QisasAnbiya": "السيرة والشمائل",
+  "0676Nawawi.Tibyan": "الأذكار والرقائق والآداب"
+ },
+ "shelf": {
+  "0256Bukhari.AdabMufrad": "الأذكار والرقائق والآداب",
+  "0505Ghazali.BidayatHidaya": "الأذكار والرقائق والآداب",
+  "0505Ghazali.IhyaCulumDin": "الأذكار والرقائق والآداب",
+  "0544QadiCiyad.Shifa": "السيرة والشمائل",
+  "0751IbnQayyimJawziyya.ZadMacad": "السيرة والشمائل",
+  "0204Shafici.Umm": "الفقه الشافعي",
+  "0593IbnHusaynShihabDinIsbahani.GhayaWaTaqrib": "الفقه الشافعي",
+  "0918IbnQasimShamsDinGhazzi.FathQarib": "الفقه الشافعي",
+  "0676Nawawi.MinhajTalibin": "الفقه الشافعي",
+  "0769IbnLuluShihabDinIbnNaqibShafici.CumdatSalik": "الفقه الشافعي",
+  "0829TaqiDinDimashqiHisni.KifayatAkhyar": "الفقه الشافعي",
+  "0676Nawawi.Majmuc": "الفقه الشافعي",
+  "0660SultanCulamaCizzDinDimashqi.QawacidAhkam": "أصول الفقه والقواعد",
+  "0852IbnHajarCasqalani.BulughMaram": "الحديث النبوي",
+  "0656IbnCabdQawiMundhiri.TarghibWaTarhib": "الحديث النبوي",
+  "0676Nawawi.RiyadSalihin": "الحديث النبوي",
+  "0676Nawawi.ArbacunaNawawiyya": "الحديث النبوي",
+  "0676Nawawi.Adhkar": "الأذكار والرقائق والآداب",
+  "0676Nawawi.MinhajFiSharhMuslim": "شروح الحديث",
+  "0852IbnHajarCasqalani.FathBari": "شروح الحديث"
+ },
+ "exclude": [],
+ "names": {
+  "0256Bukhari.Sahih": {
+   "title": "صحيح البخاري",
+   "author": "البخاري"
+  },
+  "0261Muslim.Sahih": {
+   "title": "صحيح مسلم",
+   "author": "مسلم"
+  },
+  "0275AbuDawudSijistani.Sunan": {
+   "author": "أبو داود"
+  },
+  "0279Tirmidhi.Sunan": {
+   "title": "سنن الترمذي",
+   "author": "الترمذي"
+  },
+  "0279Tirmidhi.ShamailMuhammadiyya": {
+   "author": "الترمذي"
+  },
+  "0303Nasai.SunanSughra": {
+   "title": "سنن النسائي",
+   "author": "النسائي"
+  },
+  "0273IbnMaja.Sunan": {
+   "author": "ابن ماجه"
+  },
+  "0179MalikIbnAnas.Muwatta": {
+   "title": "الموطأ",
+   "author": "مالك بن أنس"
+  },
+  "0241IbnHanbal.Musnad": {
+   "title": "مسند الإمام أحمد",
+   "author": "أحمد بن حنبل"
+  },
+  "0593IbnHusaynShihabDinIsbahani.GhayaWaTaqrib": {
+   "author": "أبو شجاع"
+  },
+  "0918IbnQasimShamsDinGhazzi.FathQarib": {
+   "title": "فتح القريب المجيب في شرح ألفاظ التقريب",
+   "author": "ابن قاسم الغزي"
+  },
+  "0769IbnLuluShihabDinIbnNaqibShafici.CumdatSalik": {
+   "author": "ابن النقيب"
+  },
+  "0829TaqiDinDimashqiHisni.KifayatAkhyar": {
+   "title": "كفاية الأخيار في حل غاية الاختصار",
+   "author": "تقي الدين الحصني"
+  },
+  "0660SultanCulamaCizzDinDimashqi.QawacidAhkam": {
+   "author": "العز بن عبد السلام"
+  },
+  "0751IbnQayyimJawziyya.ZadMacad": {
+   "title": "زاد المعاد في هدي خير العباد",
+   "author": "ابن قيم الجوزية"
+  },
+  "0213IbnHisham.SiraNabawiyya": {
+   "author": "ابن هشام"
+  },
+  "0656IbnCabdQawiMundhiri.TarghibWaTarhib": {
+   "title": "الترغيب والترهيب",
+   "author": "المنذري"
+  },
+  "0852IbnHajarCasqalani.FathBari": {
+   "title": "فتح الباري شرح صحيح البخاري",
+   "author": "ابن حجر العسقلاني"
+  },
+  "0852IbnHajarCasqalani.BulughMaram": {
+   "author": "ابن حجر العسقلاني"
+  },
+  "0676Nawawi.MinhajFiSharhMuslim": {
+   "title": "شرح النووي على صحيح مسلم"
+  },
+  "0676Nawawi.Adhkar": {
+   "title": "الأذكار"
+  },
+  "0676Nawawi.MinhajTalibin": {
+   "title": "منهاج الطالبين وعمدة المفتين"
+  },
+  "0544QadiCiyad.Shifa": {
+   "author": "القاضي عياض"
+  }
+ }
+}
