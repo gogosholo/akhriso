@@ -3,7 +3,9 @@ name: Build catalog
 on:
   push:
     branches: [main]
-    paths: [catalog/books.txt]
+    paths:
+      - catalog/books.json
+      - catalog/build_catalog.py
   workflow_dispatch:
 
 permissions:
@@ -26,11 +28,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: pip install -r catalog/requirements.txt
+      - name: Test the script
+        working-directory: catalog
+        run: python -m unittest test_build_catalog.py
 
-      # Keeps earlier downloads, so a run only fetches newly added books
-      # instead of downloading every book from Standard Ebooks again.
+      # Keeps earlier downloads, so a run only fetches pages that changed on
+      # Wikisource instead of downloading every page again.
       - name: Restore earlier downloads
         uses: actions/cache/restore@v6
         with:

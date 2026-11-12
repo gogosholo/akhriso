@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Builds Akhriso's static catalog from the Standard Ebooks pages in books.txt.
+"""Builds Akhriso's static catalog from Arabic Wikisource (ar.wikisource.org).
 
-Output (published to GitHub Pages as is):
+Reads books.json, fetches each page's text through the MediaWiki API, makes
+one EPUB per book and writes catalog.json. Output, published to GitHub Pages
+as is:
+
     output/catalog.json
     output/epubs/<id>.epub
-    output/covers/<id>.webp and <id>_thumb.webp
+
+The Arabic text is copied exactly as Wikisource has it. The only changes are
+to the layout: navigation and site furniture are removed, and in works marked
+"kitab-bab", short paragraphs that open with كتاب, باب or فصل become headings
+for the table of contents. Each EPUB ends with a credits page naming the
+source pages, their revisions and the CC BY-SA 4.0 licence.
 
 See README.md for how to add a book and run this script.
 """
@@ -12,52 +20,47 @@ See README.md for how to add a book and run this script.
 from __future__ import annotations
 
 import argparse
-import io
+import hashlib
+import html
 import json
 import re
+import shutil
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Iterator
 
-from PIL import Image
-
-USER_AGENT = "AkhrisoCatalogBuilder/1.0 (free non-commercial reading app)"
-REQUEST_GAP_SECONDS = 3
-RETRIES = 2
-REQUEST_TIMEOUT_SECONDS = 60
-# A retry cannot fix these, so repeating the request would only add load.
-PERMANENT_HTTP_ERRORS = {403, 404, 410}
+# Wikimedia asks scripts to name themselves and give a way to reach the
+# operator: https://meta.wikimedia.org/wiki/User-Agent_policy
+USER_AGENT = (
+    "AkhrisoCatalogBuilder/2.0 "
+    "(https://github.com/gogosholo/akhriso; free offline reading app)"
+)
+WIKI = "https://ar.wikisource.org"
+API = f"{WIKI}/w/api.php"
+# One request at a time, with a pause, as the API etiquette asks.
+REQUEST_GAP_SECONDS = 2
+RETRIES = 3
+REQUEST_TIMEOUT_SECONDS = 90
 MAX_RETRY_AFTER_SECONDS = 120
+# Asks the API to refuse work while its database replicas lag, so a busy
+# wiki is never pushed harder.
+MAXLAG_SECONDS = 5
 
-CATEGORIES = [
-    "Fiction",
-    "Adventure",
-    "Mystery",
-    "Short Stories",
-    "Poetry",
-    "Philosophy",
-    "History",
-    "Children",
-    "Science",
-]
-RTL_LANGUAGES = {"ar", "fa", "he", "ur"}
-LICENSE = "Public domain text; Standard Ebooks edition released under CC0 1.0"
-SOURCE = "Standard Ebooks"
-
-LONG_DESCRIPTION_LIMIT = 1200
-WORDS_PER_MINUTE = 230
-COVER_WIDTH = 400
-THUMB_WIDTH = 160
-WEBP_QUALITY = 82
+LANGUAGE = "ar"
+LICENSE = "CC BY-SA 4.0"
+LICENSE_URL = "https://creativecommons.org/licenses/by-sa/4.0/deed.ar"
+SOURCE = "Wikisource"
+# Classical Arabic prose, read carefully, is slower than everyday reading.
+WORDS_PER_MINUTE = 150
 MAX_TOTAL_BYTES = 900 * 1024 * 1024
+HEADING_MAX_CHARS = 80
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -66,72 +69,201 @@ class BookError(Exception):
     """A problem with one book. The run carries on with the next book."""
 
 
-# --- HTML parsing ------------------------------------------------------------
+# --- Fetching ----------------------------------------------------------------
+
+
+@dataclass
+class Page:
+    title: str
+    revid: int
+    html: str
+
+
+class WikiSource:
+    """Reads pages through the MediaWiki API, keeping a copy of each revision
+    so that unchanged pages are never downloaded twice."""
+
+    def __init__(self, cache_dir: Path, force: bool = False) -> None:
+        self.cache_dir = cache_dir
+        self.force = force
+        self._last_request = 0.0
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get(self, params: dict[str, str]) -> dict:
+        query = urllib.parse.urlencode(
+            {**params, "format": "json", "formatversion": "2",
+             "maxlag": str(MAXLAG_SECONDS)}
+        )
+        url = f"{API}?{query}"
+        for attempt in range(RETRIES + 1):
+            wait = REQUEST_GAP_SECONDS - (time.monotonic() - self._last_request)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_request = time.monotonic()
+            request = urllib.request.Request(
+                url,
+                headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"},
+            )
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=REQUEST_TIMEOUT_SECONDS
+                ) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                if error.code in (429, 503) and attempt < RETRIES:
+                    time.sleep(_retry_after(error.headers.get("Retry-After")))
+                    continue
+                raise BookError(f"HTTP {error.code} from the API") from error
+            except (urllib.error.URLError, TimeoutError) as error:
+                if attempt < RETRIES:
+                    time.sleep(10 * (attempt + 1))
+                    continue
+                raise BookError(f"network error: {error}") from error
+
+            code = data.get("error", {}).get("code")
+            if code == "maxlag" and attempt < RETRIES:
+                time.sleep(MAXLAG_SECONDS * (attempt + 2))
+                continue
+            if code:
+                raise BookError(f"API error {code}: {data['error'].get('info')}")
+            return data
+        raise BookError("the API stayed busy")
+
+    def latest_revisions(self, titles: list[str]) -> dict[str, int]:
+        """The current revision of each page, 50 titles per request."""
+        revisions: dict[str, int] = {}
+        for start in range(0, len(titles), 50):
+            batch = titles[start:start + 50]
+            data = self._get({
+                "action": "query",
+                "prop": "revisions",
+                "rvprop": "ids",
+                "titles": "|".join(batch),
+            })
+            for page in data.get("query", {}).get("pages", []):
+                if page.get("missing") or not page.get("revisions"):
+                    continue
+                revisions[page["title"]] = page["revisions"][0]["revid"]
+        return revisions
+
+    def _cache_file(self, title: str) -> Path:
+        digest = hashlib.sha1(title.encode("utf-8")).hexdigest()[:16]
+        return self.cache_dir / f"{digest}.json"
+
+    def page(self, title: str, revid: int) -> Page:
+        cached = self._cache_file(title)
+        if not self.force and cached.exists():
+            saved = json.loads(cached.read_text(encoding="utf-8"))
+            if saved.get("revid") == revid:
+                return Page(title, revid, saved["html"])
+        data = self._get({
+            "action": "parse",
+            "oldid": str(revid),
+            "prop": "text",
+            "disableeditsection": "1",
+            "disablelimitreport": "1",
+            "disabletoc": "1",
+        })
+        text = data["parse"]["text"]
+        cached.write_text(
+            json.dumps({"title": title, "revid": revid, "html": text},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return Page(title, revid, text)
+
+
+class OfflineSource:
+    """Reads saved Wikisource pages (<title>.html, as served at /wiki/) from a
+    folder instead of the API. For testing the script without the network."""
+
+    def __init__(self, folder: Path) -> None:
+        self.folder = folder
+
+    def _read(self, title: str) -> str | None:
+        path = self.folder / f"{title}.html"
+        return path.read_text(encoding="utf-8") if path.exists() else None
+
+    def latest_revisions(self, titles: list[str]) -> dict[str, int]:
+        revisions = {}
+        for title in titles:
+            text = self._read(title)
+            if text is not None:
+                found = re.search(r'"wgRevisionId":(\d+)', text)
+                revisions[title] = int(found.group(1)) if found else 0
+        return revisions
+
+    def page(self, title: str, revid: int) -> Page:
+        # Only the article, as the API's parse action returns it.
+        text = self._read(title) or ""
+        found = re.search(r'<div[^>]*class="[^"]*mw-parser-output[^"]*"', text)
+        start = found.start() if found else 0
+        end = text.find('<div class="printfooter"', start)
+        return Page(title, revid, text[start:end if end > 0 else None])
+
+
+def _retry_after(value: str | None) -> float:
+    try:
+        return min(float(value or 30), MAX_RETRY_AFTER_SECONDS)
+    except ValueError:
+        return 30
+
+
+# --- Reading the page HTML ---------------------------------------------------
 
 VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
     "param", "source", "track", "wbr",
 }
+# Removed with everything inside them.
+DROP_TAGS = {
+    "style", "script", "link", "meta", "img", "table", "figure", "noscript",
+    "video", "audio", "map", "math", "svg", "button", "input", "form",
+}
+DROP_IDS = {"headertemplate", "footertemplate", "textquality", "toc"}
+DROP_CLASSES = {
+    "noprint", "ws-noexport", "mw-editsection", "reference", "references",
+    "mw-references-wrap", "ext-wikisource-download-button", "navbox",
+    "catlinks", "mw-empty-elt", "ws-header", "ws-footer", "metadata",
+}
+BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "li", "dd",
+              "dt", "pre"}
+INLINE_KEEP = {"b": "b", "strong": "b", "i": "i", "em": "i", "sup": "sup",
+               "sub": "sub"}
+INLINE_UNWRAP = {"span", "a", "font", "small", "big", "u", "abbr", "bdi"}
 
 
-class Node:
-    """One HTML element."""
-
+class _Node:
     def __init__(self, tag: str, attrs: dict[str, str]) -> None:
         self.tag = tag
         self.attrs = attrs
-        self.children: list[Node | str] = []
+        self.children: list[_Node | str] = []
 
-    def iter(self) -> Iterator[Node]:
-        for child in self.children:
-            if isinstance(child, Node):
-                yield child
-                yield from child.iter()
-
-    def find_all(self, tag: str, **attrs: str) -> list[Node]:
-        return [
-            node
-            for node in self.iter()
-            if node.tag == tag
-            and all(node.attrs.get(k) == v for k, v in attrs.items())
-        ]
-
-    def find(self, tag: str, **attrs: str) -> Node | None:
-        matches = self.find_all(tag, **attrs)
-        return matches[0] if matches else None
-
-    def has_class(self, name: str) -> bool:
-        return name in self.attrs.get("class", "").split()
-
-    def text(self) -> str:
-        parts = [
-            child if isinstance(child, str) else child.text()
-            for child in self.children
-        ]
-        return clean_text("".join(parts))
+    def dropped(self) -> bool:
+        if self.tag in DROP_TAGS:
+            return True
+        if self.attrs.get("id") in DROP_IDS:
+            return True
+        classes = set(self.attrs.get("class", "").split())
+        return bool(classes & DROP_CLASSES)
 
 
-class TreeBuilder(HTMLParser):
+class _TreeBuilder(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.root = Node("document", {})
+        self.root = _Node("root", {})
         self._stack = [self.root]
 
-    def _add(self, tag: str, attrs: list[tuple[str, str | None]]) -> Node:
-        node = Node(tag, {key: value or "" for key, value in attrs})
-        self._stack[-1].children.append(node)
-        return node
-
     def handle_starttag(self, tag, attrs):
-        node = self._add(tag, attrs)
+        node = _Node(tag, {k: v or "" for k, v in attrs})
+        self._stack[-1].children.append(node)
         if tag not in VOID_TAGS:
             self._stack.append(node)
 
     def handle_startendtag(self, tag, attrs):
-        self._add(tag, attrs)
+        self._stack[-1].children.append(_Node(tag, {k: v or "" for k, v in attrs}))
 
     def handle_endtag(self, tag):
-        # Closes back to the matching tag, tolerating unclosed elements inside.
         for index in range(len(self._stack) - 1, 0, -1):
             if self._stack[index].tag == tag:
                 del self._stack[index:]
@@ -141,482 +273,495 @@ class TreeBuilder(HTMLParser):
         self._stack[-1].children.append(data)
 
 
-def clean_text(text: str) -> str:
-    # Standard Ebooks puts word joiners inside text for typesetting.
-    return re.sub(r"\s+", " ", text.replace("⁠", "")).strip()
-
-
-def truncate(text: str, limit: int = LONG_DESCRIPTION_LIMIT) -> str:
-    """Shortens text at a sentence end if possible, otherwise at a word end."""
-    if len(text) <= limit:
-        return text
-    head = text[:limit]
-    sentence_ends = list(re.finditer(r"[.!?][’”\"]?(?=\s)", head))
-    if sentence_ends and sentence_ends[-1].end() >= limit * 0.6:
-        return head[: sentence_ends[-1].end()]
-    return head.rsplit(None, 1)[0].rstrip(" ,;:") + "…"
-
-
 @dataclass
-class PageData:
-    """Everything read from one book page. Saved so re-runs need no requests."""
+class Block:
+    """One paragraph-sized piece of text, as XHTML ready for the EPUB."""
 
-    title: str
-    author: str
-    language: str
-    short_description: str
-    long_description: str
-    subjects: list[str]
-    word_count: int
-    reading_ease: float | None
-    epub_url: str
-    cover_url: str
+    tag: str  # p, h2, h3, blockquote or hr
+    inline: str = ""
+    plain: str = ""
 
 
-def _meta(article: Node, prop: str) -> str:
-    node = article.find("meta", property=prop)
-    return node.attrs.get("content", "").strip() if node else ""
+_SPACE = re.compile(r"[ \t\r\n\f ]+")
+# Zero-width marks some templates leave around titles; nothing to read.
+_INVISIBLE = re.compile(r"[​﻿]")
 
 
-def _required(value, label: str):
-    if not value:
-        raise BookError(f"could not find {label} on the page")
-    return value
+def _inline(node: _Node | str) -> tuple[str, str]:
+    """The node's inline XHTML and its plain text."""
+    if isinstance(node, str):
+        return html.escape(node, quote=False), node
+    if node.dropped():
+        return "", ""
+    if node.tag == "br":
+        return "<br/>", "\n"
+    parts = [_inline(child) for child in node.children]
+    inner = "".join(p[0] for p in parts)
+    text = "".join(p[1] for p in parts)
+    kept = INLINE_KEEP.get(node.tag)
+    if kept and text.strip():
+        return f"<{kept}>{inner}</{kept}>", text
+    return inner, text
 
 
-def _find_epub_href(article: Node) -> str:
-    for link in article.find_all("a"):
-        if link.has_class("epub") and link.text().lower() == "compatible epub":
-            return link.attrs.get("href", "")
-    return ""
+def _tidy(markup: str, text: str) -> tuple[str, str]:
+    markup = _SPACE.sub(" ", _INVISIBLE.sub("", markup)).strip()
+    markup = re.sub(r"\s*<br/>\s*", "<br/>", markup)
+    markup = re.sub(r"^(<br/>)+|(<br/>)+$", "", markup)
+    text = _SPACE.sub(" ", _INVISIBLE.sub("", text)).strip()
+    return markup, text
 
 
-def _largest_srcset_url(srcset: str) -> str:
-    """Returns the highest-density URL of a srcset such as 'a.jpg 2x, b.jpg 1x'."""
-    best_url, best_density = "", -1.0
-    for candidate in srcset.split(","):
-        parts = candidate.split()
-        if not parts:
+def _has_block(node: _Node) -> bool:
+    for child in node.children:
+        if isinstance(child, _Node) and not child.dropped():
+            if child.tag in BLOCK_TAGS or child.tag in {"div", "hr", "ul",
+                                                        "ol", "section"}:
+                return True
+            if _has_block(child):
+                return True
+    return False
+
+
+def page_blocks(page_html: str) -> list[Block]:
+    """The readable paragraphs of a page, in order, without site furniture."""
+    builder = _TreeBuilder()
+    builder.feed(page_html)
+    builder.close()
+    blocks: list[Block] = []
+    pending: list[_Node | str] = []
+
+    def flush() -> None:
+        if not pending:
+            return
+        wrapper = _Node("span", {})
+        wrapper.children = list(pending)
+        pending.clear()
+        markup, text = _tidy(*_inline(wrapper))
+        if text:
+            blocks.append(Block("p", markup, text))
+
+    def walk(node: _Node) -> None:
+        for child in node.children:
+            if isinstance(child, str):
+                pending.append(child)
+                continue
+            if child.dropped():
+                continue
+            if child.tag == "hr":
+                flush()
+                blocks.append(Block("hr"))
+            elif child.tag in BLOCK_TAGS and not _has_block(child):
+                flush()
+                markup, text = _tidy(*_inline(child))
+                if not text:
+                    continue
+                tag = "blockquote" if child.tag == "blockquote" else "p"
+                if child.tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+                    tag = "h2" if child.tag in {"h1", "h2"} else "h3"
+                blocks.append(Block(tag, markup, text))
+            elif child.tag == "br" or (
+                (child.tag in INLINE_KEEP or child.tag in INLINE_UNWRAP)
+                and not _has_block(child)
+            ):
+                pending.append(child)
+            else:
+                # Containers (div, section, ul, center and so on).
+                flush()
+                walk(child)
+                flush()
+
+    walk(builder.root)
+    flush()
+    return blocks
+
+
+_HEADING_WORDS = {"كتاب": "h2", "باب": "h3", "فصل": "h3"}
+
+
+def mark_headings(blocks: list[Block]) -> list[Block]:
+    """Turns short paragraphs that open with كتاب, باب or فصل into headings.
+    The words themselves are not touched."""
+    marked = []
+    for block in blocks:
+        words = block.plain.split()
+        level = _HEADING_WORDS.get(words[0]) if words else None
+        if (
+            block.tag == "p"
+            and level
+            and len(words) > 1
+            and len(block.plain) <= HEADING_MAX_CHARS
+            and block.plain[-1] not in ".:،؛"
+        ):
+            marked.append(Block(level, block.inline, block.plain))
+        else:
+            marked.append(block)
+    return marked
+
+
+def part_links(page_html: str, prefix: str) -> list[str]:
+    """Titles of the pages an index page links to that start with [prefix],
+    in the order they appear and without repeats."""
+    titles: list[str] = []
+    for tag in re.findall(r"<a\s[^>]*>", page_html):
+        found = re.search(r'href="([^"]+)"', tag)
+        # Links to pages that don't exist yet ("red links") are not parts.
+        if not found or "redlink=1" in tag or re.search(r'class="[^"]*\bnew\b', tag):
             continue
-        match = re.fullmatch(r"([\d.]+)x", parts[1]) if len(parts) > 1 else None
-        density = float(match.group(1)) if match else 1.0
-        if density > best_density:
-            best_url, best_density = parts[0], density
-    return best_url
+        href = html.unescape(found.group(1))
+        if "/wiki/" in href:
+            target = href.split("/wiki/", 1)[1]
+        elif href.startswith("./"):
+            target = href[2:]
+        else:
+            continue
+        target = urllib.parse.unquote(target.split("#")[0].split("?")[0])
+        title = target.replace("_", " ").strip()
+        if title.startswith(prefix) and title != prefix and title not in titles:
+            titles.append(title)
+    return titles
 
 
-def _find_cover_href(article: Node) -> str:
-    # The cover is the picture beside the download list. The page's other
-    # pictures are a wide hero banner and covers of unrelated books.
-    for container in article.iter():
-        if container.tag == "div" and container.has_class("downloads-container"):
-            source = container.find("source", type="image/jpeg")
-            if source:
-                return _largest_srcset_url(source.attrs.get("srcset", ""))
-            image = container.find("img")
-            return image.attrs.get("src", "") if image else ""
-    return ""
-
-
-def parse_book_page(html: str, page_url: str) -> PageData:
-    builder = TreeBuilder()
-    builder.feed(html)
-    article = next(
-        (n for n in builder.root.iter() if n.tag == "article" and n.has_class("ebook")),
-        None,
-    )
-    if article is None:
-        raise BookError("page has no book details (is the URL a released ebook?)")
-
-    title = article.find("h1", property="schema:name")
-    authors = []
-    for link in article.find_all("a", property="schema:author"):
-        name = link.find("span", property="schema:name")
-        if name and name.text() not in authors:
-            authors.append(name.text())
-
-    tag_lists = [n for n in article.iter() if n.tag == "ul" and n.has_class("tags")]
-    subjects = [a.text() for ul in tag_lists for a in ul.find_all("a")]
-
-    description = article.find("div", property="schema:description")
-    paragraphs: list[str] = []
-    if description:
-        blocks = [c for c in description.children if isinstance(c, Node)]
-        paragraphs = [b.text() for b in blocks if b.text()]
-
-    word_count = _meta(article, "schema:wordCount")
-    ease = re.search(r"reading ease of ([\d.]+)", article.text())
-
-    return PageData(
-        title=_required(title.text() if title else "", "the title"),
-        author=_required(", ".join(authors), "the author"),
-        language=_meta(article, "schema:inLanguage").split("-")[0].lower() or "en",
-        short_description=_required(
-            clean_text(_meta(article, "schema:abstract")), "the short description"
-        ),
-        long_description=truncate("\n\n".join(paragraphs)),
-        subjects=subjects,
-        word_count=int(_required(word_count, "the word count")),
-        reading_ease=float(ease.group(1)) if ease else None,
-        epub_url=urllib.parse.urljoin(
-            page_url, _required(_find_epub_href(article), "the compatible epub link")
-        ),
-        cover_url=urllib.parse.urljoin(
-            page_url, _required(_find_cover_href(article), "the cover image")
-        ),
-    )
-
-
-# --- Network -----------------------------------------------------------------
-
-
-class PoliteClient:
-    """Makes one request at a time, with a fixed gap between requests."""
-
-    def __init__(self, gap_seconds: float = REQUEST_GAP_SECONDS) -> None:
-        self._gap = gap_seconds
-        self._next_request_at = 0.0
-
-    def _wait_for_turn(self) -> None:
-        delay = self._next_request_at - time.monotonic()
-        if delay > 0:
-            time.sleep(delay)
-
-    def _request_once(self, url: str) -> bytes:
-        self._wait_for_turn()
-        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        try:
-            with urllib.request.urlopen(
-                request, timeout=REQUEST_TIMEOUT_SECONDS
-            ) as response:
-                return response.read()
-        finally:
-            self._next_request_at = time.monotonic() + self._gap
-
-    def _honor_retry_after(self, error: urllib.error.HTTPError) -> None:
-        value = error.headers.get("Retry-After", "") if error.headers else ""
-        if value.isdigit():
-            wait = min(int(value), MAX_RETRY_AFTER_SECONDS)
-            self._next_request_at = max(
-                self._next_request_at, time.monotonic() + wait
-            )
-
-    def fetch(self, url: str) -> bytes:
-        failure = ""
-        for attempt in range(RETRIES + 1):
-            try:
-                return self._request_once(url)
-            except urllib.error.HTTPError as error:
-                failure = f"HTTP {error.code}"
-                if error.code in PERMANENT_HTTP_ERRORS:
-                    break
-                self._honor_retry_after(error)
-            except (urllib.error.URLError, TimeoutError, OSError) as error:
-                failure = str(getattr(error, "reason", error))
-            if attempt < RETRIES:
-                print(f"    retrying after failure ({failure})")
-        raise BookError(f"{failure} for {url}")
-
-
-# --- Building one book -------------------------------------------------------
+# --- Making the EPUB ---------------------------------------------------------
 
 
 @dataclass
-class Entry:
-    url: str
-    category: str
-    featured: bool
-    book_id: str
+class Chapter:
+    page: Page
+    blocks: list[Block]
+    file: str = ""
+    # (level, id, text) for each heading, for the table of contents.
+    headings: list[tuple[int, str, str]] = field(default_factory=list)
 
 
-@dataclass
-class Paths:
-    output: Path
-    cache: Path
-
-    @property
-    def epubs(self) -> Path:
-        return self.output / "epubs"
-
-    @property
-    def covers(self) -> Path:
-        return self.output / "covers"
-
-    def epub(self, book_id: str) -> Path:
-        return self.epubs / f"{book_id}.epub"
-
-    def cover(self, book_id: str) -> Path:
-        return self.covers / f"{book_id}.webp"
-
-    def thumb(self, book_id: str) -> Path:
-        return self.covers / f"{book_id}_thumb.webp"
-
-    def page_data(self, book_id: str) -> Path:
-        return self.cache / f"{book_id}.json"
+def wiki_url(title: str, revid: int | None = None) -> str:
+    path = urllib.parse.quote(title.replace(" ", "_"))
+    url = f"{WIKI}/wiki/{path}"
+    return f"{url}?oldid={revid}" if revid else url
 
 
-def book_id_from_url(url: str) -> str:
-    """Builds '<author-slug>_<title-slug>' from a book page URL."""
-    segments = [s for s in urllib.parse.urlparse(url).path.split("/") if s]
-    if len(segments) < 3 or segments[0] != "ebooks":
-        raise BookError(f"not a book page URL: {url}")
-    book_id = f"{segments[1]}_{segments[2]}"
-    if not re.fullmatch(r"[a-z0-9_-]+", book_id):
-        raise BookError(f"unexpected characters in URL: {url}")
-    return book_id
+def _xhtml(title: str, body: str, body_type: str) -> str:
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml" '
+        'xmlns:epub="http://www.idpf.org/2007/ops" '
+        f'xml:lang="{LANGUAGE}" lang="{LANGUAGE}" dir="rtl">\n'
+        f'<head><meta charset="utf-8"/><title>{html.escape(title)}</title>'
+        '<link rel="stylesheet" type="text/css" href="../css/book.css"/></head>\n'
+        f'<body epub:type="{body_type}">\n{body}\n</body>\n</html>\n'
+    )
 
 
-def parse_line(line: str) -> Entry:
-    parts = [part.strip() for part in line.split("|")]
-    if len(parts) != 3:
-        raise BookError("expected: <url> | <category> | <yes/no>")
-    url, category, featured = parts
-    if category not in CATEGORIES:
-        raise BookError(f"unknown category '{category}'")
-    if featured.lower() not in ("yes", "no"):
-        raise BookError(f"featured must be yes or no, got '{featured}'")
-    return Entry(url, category, featured.lower() == "yes", book_id_from_url(url))
+def _chapter_body(chapter: Chapter) -> str:
+    lines = []
+    chapter.headings.clear()
+    for index, block in enumerate(chapter.blocks):
+        if block.tag == "hr":
+            lines.append("<hr/>")
+        elif block.tag in {"h2", "h3"}:
+            anchor = f"h{index}"
+            level = 0 if block.tag == "h2" else 1
+            chapter.headings.append((level, anchor, block.plain))
+            lines.append(f'<{block.tag} id="{anchor}">{block.inline}</{block.tag}>')
+        elif block.tag == "blockquote":
+            lines.append(f"<blockquote><p>{block.inline}</p></blockquote>")
+        else:
+            lines.append(f"<p>{block.inline}</p>")
+    return "\n".join(lines)
 
 
-def write_atomically(path: Path, data: bytes) -> None:
-    """Never leaves a half-written file, even if the run is interrupted."""
-    temporary = path.with_name(path.name + ".part")
-    temporary.write_bytes(data)
+def _credits_body(title: str, author: str, chapters: list[Chapter],
+                  retrieved: str) -> str:
+    # In Somali, the app's language. The Arabic title and author are as on
+    # Wikisource.
+    pages = "\n".join(
+        f'<li><a href="{html.escape(wiki_url(c.page.title, c.page.revid))}">'
+        f"{html.escape(c.page.title)}</a></li>"
+        for c in chapters
+    )
+    return f"""<section epub:type="colophon">
+<h2 dir="ltr">Isha iyo xuquuqda</h2>
+<p>{html.escape(title)} — {html.escape(author)}</p>
+<p dir="ltr">Qoraalkan waxaa laga soo qaatay Wikisource-ka Carabiga (ويكي مصدر). Waxaa diyaariyey tabarucayaasha Wikisource.</p>
+<p dir="ltr">Waxaa lagu daabacay shatiga <a href="{LICENSE_URL}">Creative Commons Attribution-ShareAlike 4.0 (CC BY-SA 4.0)</a>. Waad wadaagi kartaa oo wax ka beddeli kartaa, haddii aad xusto isha oo aad shati isku mid ah ku sii daayso.</p>
+<p dir="ltr">Qoraalka Carabiga wax laguma beddelin. Waxaa keliya laga saaray qaybaha bogga shabakadda, waxaana cinwaan laga dhigay xarriimaha gaagaaban ee ku bilowda «كتاب», «باب» ama «فصل», si buuggu u yeesho tusmo.</p>
+<p dir="ltr">Bogagga asalka ah, sidii ay ahaayeen {retrieved}:</p>
+<ul>
+{pages}
+</ul>
+</section>"""
+
+
+CSS = """body { direction: rtl; }
+h2, h3 { text-align: center; }
+p { text-align: justify; }
+"""
+
+
+def _toc(chapters: list[Chapter]) -> str:
+    """Contents: the headings where a work has them, otherwise one entry per
+    Wikisource page, named as the page is. The nav file sits beside the
+    chapters, so links are relative to text/."""
+    items: list[str] = []
+    for chapter in chapters:
+        name = chapter.file.split("/")[-1]
+        if not chapter.headings:
+            items.append(f'<li><a href="{name}">'
+                         f"{html.escape(chapter.page.title)}</a></li>")
+            continue
+        open_section = False
+        for level, anchor, text in chapter.headings:
+            link = f'<a href="{name}#{anchor}">{html.escape(text)}</a>'
+            if level == 0:
+                if open_section:
+                    items.append("</ol></li>")
+                items.append(f"<li>{link}<ol>")
+                open_section = True
+            else:
+                items.append(f"<li>{link}</li>")
+        if open_section:
+            items.append("</ol></li>")
+    # A كتاب heading with no باب under it must not leave an empty list.
+    return "\n".join(items).replace("<ol>\n</ol>", "")
+
+
+def build_epub(path: Path, book_id: str, title: str, author: str,
+               chapters: list[Chapter], retrieved: str) -> None:
+    files: list[tuple[str, str]] = []
+    for number, chapter in enumerate(chapters, start=1):
+        chapter.file = f"text/part-{number:02d}.xhtml"
+        files.append((chapter.file, _xhtml(title, _chapter_body(chapter),
+                                           "bodymatter")))
+    files.append(("text/credits.xhtml", _xhtml(
+        title, _credits_body(title, author, chapters, retrieved), "backmatter")))
+
+    first = chapters[0].file.split("/")[-1]
+    nav = _xhtml(title, f"""<nav epub:type="toc" id="toc"><h2>{html.escape(title)}</h2><ol>
+{_toc(chapters)}
+</ol></nav>
+<nav epub:type="landmarks" hidden="hidden"><ol>
+<li><a epub:type="bodymatter" href="{first}">{html.escape(title)}</a></li>
+</ol></nav>""", "frontmatter")
+
+    manifest = ['<item id="nav" href="text/nav.xhtml" '
+                'media-type="application/xhtml+xml" properties="nav"/>',
+                '<item id="css" href="css/book.css" media-type="text/css"/>']
+    spine = []
+    for index, (name, _) in enumerate(files):
+        item = f"item{index}"
+        manifest.append(f'<item id="{item}" href="{name}" '
+                        'media-type="application/xhtml+xml"/>')
+        spine.append(f'<itemref idref="{item}"/>')
+    modified = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    newline = "\n"
+    opf = f"""<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="{LANGUAGE}" dir="rtl">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:identifier id="uid">akhriso:{book_id}</dc:identifier>
+<dc:title>{html.escape(title)}</dc:title>
+<dc:creator>{html.escape(author)}</dc:creator>
+<dc:language>{LANGUAGE}</dc:language>
+<dc:source>{html.escape(wiki_url(chapters[0].page.title))}</dc:source>
+<dc:rights>{LICENSE}</dc:rights>
+<meta property="dcterms:modified">{modified}</meta>
+</metadata>
+<manifest>
+{newline.join(manifest)}
+</manifest>
+<spine page-progression-direction="rtl">
+{newline.join(spine)}
+</spine>
+</package>
+"""
+    container = """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>
+"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".part")
+    with zipfile.ZipFile(temporary, "w") as epub:
+        # The mimetype comes first and uncompressed, as EPUB requires.
+        epub.writestr("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
+        epub.writestr("META-INF/container.xml", container, zipfile.ZIP_DEFLATED)
+        epub.writestr("OEBPS/content.opf", opf, zipfile.ZIP_DEFLATED)
+        epub.writestr("OEBPS/text/nav.xhtml", nav, zipfile.ZIP_DEFLATED)
+        epub.writestr("OEBPS/css/book.css", CSS, zipfile.ZIP_DEFLATED)
+        for name, content in files:
+            epub.writestr(f"OEBPS/{name}", content, zipfile.ZIP_DEFLATED)
     temporary.replace(path)
 
 
-def validate_epub(data: bytes) -> None:
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            mimetype = archive.read("mimetype").decode("ascii").strip()
-    except (zipfile.BadZipFile, KeyError, UnicodeDecodeError) as error:
-        raise BookError(f"download is not an EPUB file ({error})") from error
-    if mimetype != "application/epub+zip":
-        raise BookError(f"download is not an EPUB file (mimetype {mimetype})")
+# --- The catalog -------------------------------------------------------------
+
+_ARABIC_WORD = re.compile(r"[؀-ۿݐ-ݿ]+")
 
 
-def resize_to_webp(image: Image.Image, width: int) -> bytes:
-    height = round(image.height * width / image.width)
-    resized = image.resize((width, height), Image.Resampling.LANCZOS)
-    buffer = io.BytesIO()
-    resized.save(buffer, "WEBP", quality=WEBP_QUALITY, method=6)
-    return buffer.getvalue()
+def word_count(chapters: list[Chapter]) -> int:
+    return sum(len(_ARABIC_WORD.findall(b.plain))
+               for c in chapters for b in c.blocks)
 
 
-def write_covers(data: bytes, paths: Paths, book_id: str) -> None:
-    try:
-        image = Image.open(io.BytesIO(data)).convert("RGB")
-    except OSError as error:
-        raise BookError(f"could not read the cover image ({error})") from error
-    write_atomically(paths.cover(book_id), resize_to_webp(image, COVER_WIDTH))
-    write_atomically(paths.thumb(book_id), resize_to_webp(image, THUMB_WIDTH))
+def load_works(path: Path) -> list[dict]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    works = data.get("works")
+    if not isinstance(works, list) or not works:
+        raise SystemExit(f"{path.name} lists no works.")
+    ids = set()
+    for work in works:
+        for key in ("category", "author", "books"):
+            if not work.get(key):
+                raise SystemExit(f"A work in {path.name} has no {key}.")
+        for book in work["books"]:
+            book_id = book.get("id", "")
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", book_id):
+                raise SystemExit(f"Book id {book_id!r} must be lower-case "
+                                 "letters, digits and hyphens.")
+            if book_id in ids:
+                raise SystemExit(f"Book id {book_id} is used twice.")
+            ids.add(book_id)
+            if not book.get("title") or not (book.get("pages")
+                                             or book.get("partsFrom")):
+                raise SystemExit(f"Book {book_id} needs a title and either "
+                                 "pages or partsFrom.")
+    return works
 
 
-def load_cached_page(paths: Paths, book_id: str) -> PageData | None:
-    """Returns saved page data if this book is already fully built."""
-    files = [
-        paths.epub(book_id),
-        paths.cover(book_id),
-        paths.thumb(book_id),
-        paths.page_data(book_id),
-    ]
-    if not all(path.exists() for path in files):
-        return None
-    try:
-        return PageData(**json.loads(paths.page_data(book_id).read_text("utf-8")))
-    except (ValueError, TypeError):
-        return None
+def build_book(source, work: dict, book: dict, output: Path,
+               retrieved: str) -> dict:
+    pages = book.get("pages")
+    if not pages:
+        index_title = book["partsFrom"]
+        revision = source.latest_revisions([index_title]).get(index_title)
+        if revision is None:
+            raise BookError(f"index page not found: {index_title}")
+        index = source.page(index_title, revision)
+        pages = part_links(index.html, book.get("partsPrefix") or index_title)
+        if not pages:
+            raise BookError(f"no part pages are linked from {index_title}")
 
+    revisions = source.latest_revisions(pages)
+    missing = [title for title in pages if title not in revisions]
+    if missing and book.get("pages"):
+        raise BookError(f"pages not found: {', '.join(missing)}")
+    if missing:
+        # An index may link to parts nobody has added yet.
+        print(f"  note: {book['id']} skips missing pages: {', '.join(missing)}")
+        pages = [title for title in pages if title in revisions]
+        if not pages:
+            raise BookError("none of the linked part pages exist")
 
-def find_refresh_url(html: str, base_url: str) -> str:
-    """Returns the target of a page's meta refresh tag, or "" if it has none."""
-    builder = TreeBuilder()
-    builder.feed(html)
-    for node in builder.root.iter():
-        if node.tag == "meta" and node.attrs.get("http-equiv", "").lower() == "refresh":
-            match = re.search(
-                r"url\s*=\s*['\"]?([^'\"\s]+)", node.attrs.get("content", ""), re.I
-            )
-            if match:
-                return urllib.parse.urljoin(base_url, match.group(1))
-    return ""
+    chapters = []
+    for title in pages:
+        page = source.page(title, revisions[title])
+        blocks = page_blocks(page.html)
+        if work.get("headings") == "kitab-bab":
+            blocks = mark_headings(blocks)
+        if not blocks:
+            raise BookError(f"no text on {title}")
+        chapters.append(Chapter(page, blocks))
 
-
-def fetch_epub(client: PoliteClient, url: str) -> bytes:
-    """Downloads an EPUB, following the site's thank-you page if it shows one.
-
-    Standard Ebooks answers a first-time download with a "Your Download Has
-    Started!" web page, whose meta refresh link serves the file to a browser.
-    """
-    data = client.fetch(url)
-    if data.startswith(b"PK"):
-        return data
-
-    target = find_refresh_url(data.decode("utf-8", errors="replace"), url)
-    original, redirected = urllib.parse.urlparse(url), urllib.parse.urlparse(target)
-    # Only ever follows a link to this same file on this same site.
-    if (redirected.netloc, redirected.path) != (original.netloc, original.path):
-        return data
-    return client.fetch(target)
-
-
-def download_book(entry: Entry, paths: Paths, client: PoliteClient) -> PageData:
-    html = client.fetch(entry.url).decode("utf-8", errors="replace")
-    page = parse_book_page(html, entry.url)
-
-    epub = fetch_epub(client, page.epub_url)
-    validate_epub(epub)
-    write_atomically(paths.epub(entry.book_id), epub)
-
-    write_covers(client.fetch(page.cover_url), paths, entry.book_id)
-
-    # Written last: its presence marks the book as completely downloaded.
-    write_atomically(
-        paths.page_data(entry.book_id),
-        json.dumps(asdict(page), ensure_ascii=False, indent=2).encode("utf-8"),
-    )
-    return page
-
-
-def catalog_record(entry: Entry, page: PageData, paths: Paths) -> dict:
-    # Key order matches the documented catalog.json shape.
-    book_id = entry.book_id
+    epub_path = output / "epubs" / f"{book['id']}.epub"
+    build_epub(epub_path, book["id"], book["title"], work["author"],
+               chapters, retrieved)
+    words = word_count(chapters)
+    index_page = book.get("partsFrom") or pages[0]
     return {
-        "id": book_id,
-        "title": page.title,
-        "author": page.author,
-        "language": page.language,
-        "direction": "rtl" if page.language in RTL_LANGUAGES else "ltr",
-        "category": entry.category,
-        "subjects": page.subjects,
-        "featured": entry.featured,
-        "shortDescription": page.short_description,
-        "longDescription": page.long_description,
-        "wordCount": page.word_count,
-        "readingMinutes": int(page.word_count / WORDS_PER_MINUTE + 0.5),
-        "cover": f"covers/{book_id}.webp",
-        "coverThumb": f"covers/{book_id}_thumb.webp",
-        "epub": f"epubs/{book_id}.epub",
-        "epubBytes": paths.epub(book_id).stat().st_size,
+        "id": book["id"],
+        "title": book["title"],
+        "author": work["author"],
+        "language": LANGUAGE,
+        "direction": "rtl",
+        "category": work["category"],
+        "subjects": [],
+        "featured": bool(book.get("featured")),
+        "shortDescription": "",
+        "longDescription": "",
+        "wordCount": words,
+        "readingMinutes": max(1, round(words / WORDS_PER_MINUTE)),
+        "cover": "",
+        "coverThumb": "",
+        "epub": f"epubs/{book['id']}.epub",
+        "epubBytes": epub_path.stat().st_size,
         "source": SOURCE,
-        "sourceUrl": entry.url,
+        "sourceUrl": wiki_url(index_page),
         "license": LICENSE,
     }
 
 
-# --- The whole run -----------------------------------------------------------
-
-
-def read_entries(books_file: Path) -> tuple[list[Entry], list[tuple[str, str]]]:
-    entries: list[Entry] = []
-    failures: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    lines = books_file.read_text("utf-8").splitlines()
-    for number, raw in enumerate(lines, start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        try:
-            entry = parse_line(line)
-            if entry.book_id in seen:
-                raise BookError(f"duplicate id {entry.book_id}")
-        except BookError as error:
-            failures.append((f"books.txt line {number}", str(error)))
-            continue
-        seen.add(entry.book_id)
-        entries.append(entry)
-    return entries, failures
-
-
-def remove_stale_files(entries: list[Entry], paths: Paths) -> None:
-    """Deletes output for books no longer listed, so they are not published."""
-    keep: set[Path] = set()
-    for entry in entries:
-        keep |= {
-            paths.epub(entry.book_id),
-            paths.cover(entry.book_id),
-            paths.thumb(entry.book_id),
-            paths.page_data(entry.book_id),
-        }
-    for folder in (paths.epubs, paths.covers, paths.cache):
-        for path in folder.iterdir():
-            if path not in keep:
-                path.unlink()
-                print(f"Removed stale file {path.name}")
-
-
-def folder_bytes(folder: Path) -> int:
-    return sum(path.stat().st_size for path in folder.iterdir() if path.is_file())
-
-
-def build(books_file: Path, paths: Paths, force: bool, client: PoliteClient) -> int:
-    for folder in (paths.epubs, paths.covers, paths.cache):
-        folder.mkdir(parents=True, exist_ok=True)
-
-    entries, failures = read_entries(books_file)
-    remove_stale_files(entries, paths)
-
-    records: list[dict] = []
-    for index, entry in enumerate(entries, start=1):
-        label = f"[{index}/{len(entries)}] {entry.book_id}"
-        page = None if force else load_cached_page(paths, entry.book_id)
-        try:
-            if page is not None:
-                print(f"{label}: already downloaded, skipping")
-            else:
-                print(f"{label}: downloading")
-                page = download_book(entry, paths, client)
-            records.append(catalog_record(entry, page, paths))
-        except BookError as error:
-            print(f"{label}: FAILED ({error})")
-            failures.append((entry.book_id, str(error)))
-
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    catalog = {
-        "schemaVersion": 1,
-        "generatedAt": generated_at,
-        "categories": CATEGORIES,
-        "books": records,
-    }
-    catalog_bytes = json.dumps(catalog, ensure_ascii=False, indent=2).encode("utf-8")
-    total = folder_bytes(paths.epubs) + folder_bytes(paths.covers) + len(catalog_bytes)
-
-    print()
-    print(f"Books OK: {len(records)}")
-    print(f"Books failed: {len(failures)}")
-    for name, reason in failures:
-        print(f"  - {name}: {reason}")
-    print(f"Total size: {total / (1024 * 1024):.1f} MB")
-
-    if total > MAX_TOTAL_BYTES:
-        print(f"ERROR: over the {MAX_TOTAL_BYTES // (1024 * 1024)} MB limit.")
-        return 1
-    if not records:
-        # Publishing an empty catalog would wipe the app's book list.
-        print("ERROR: no books succeeded, so catalog.json was not written.")
-        return 1
-
-    write_atomically(paths.output / "catalog.json", catalog_bytes)
-    print(f"Wrote {paths.output / 'catalog.json'}")
-    return 0
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--force", action="store_true", help="download books again even if present"
-    )
-    parser.add_argument("--books", type=Path, default=SCRIPT_DIR / "books.txt")
-    parser.add_argument("--output", type=Path, default=SCRIPT_DIR / "output")
-    parser.add_argument(
-        "--cache",
-        type=Path,
-        default=SCRIPT_DIR / "cache",
-        help="where page data is kept (not published)",
-    )
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--force", action="store_true",
+                        help="download every page again, ignoring the cache")
+    parser.add_argument("--offline", type=Path, metavar="FOLDER",
+                        help="read saved <title>.html pages instead of the API")
+    parser.add_argument("--only", nargs="+", metavar="ID",
+                        help="build only these book ids (for testing)")
     args = parser.parse_args()
 
-    return build(args.books, Paths(args.output, args.cache), args.force, PoliteClient())
+    works = load_works(SCRIPT_DIR / "books.json")
+    output = SCRIPT_DIR / "output"
+    source = (OfflineSource(args.offline) if args.offline
+              else WikiSource(SCRIPT_DIR / "cache", force=args.force))
+    retrieved = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    entries, failures = [], []
+    for work in works:
+        for book in work["books"]:
+            if args.only and book["id"] not in args.only:
+                continue
+            try:
+                entry = build_book(source, work, book, output, retrieved)
+            except BookError as error:
+                failures.append((book["id"], str(error)))
+                print(f"FAILED {book['id']}: {error}")
+                continue
+            entries.append(entry)
+            print(f"OK     {book['id']}: {entry['wordCount']:,} words, "
+                  f"{entry['epubBytes'] / 1024:,.0f} KB")
+
+    total = sum(entry["epubBytes"] for entry in entries)
+    print(f"\n{len(entries)} books OK, {len(failures)} failed, "
+          f"{total / 1024 / 1024:.1f} MB")
+    for book_id, reason in failures:
+        print(f"  {book_id}: {reason}")
+    if not entries:
+        print("No book succeeded, so catalog.json was not written.")
+        return 1
+    if total > MAX_TOTAL_BYTES:
+        print("Over the size limit, so catalog.json was not written.")
+        return 1
+
+    # Removes the files of books that are no longer listed, and anything an
+    # older version of the catalog left in the folder (such as covers).
+    if not args.only:
+        kept = {f"{entry['id']}.epub" for entry in entries}
+        for old in (output / "epubs").glob("*"):
+            if old.name not in kept:
+                old.unlink()
+        for old in output.iterdir():
+            if old.name in {"epubs", "catalog.json"}:
+                continue
+            if old.is_dir():
+                shutil.rmtree(old)
+            else:
+                old.unlink()
+
+    categories = [
+        work["category"] for work in works
+        if any(entry["category"] == work["category"] for entry in entries)
+    ]
+    catalog = {
+        "schemaVersion": 1,
+        "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "categories": categories,
+        "books": entries,
+    }
+    temporary = output / "catalog.json.part"
+    temporary.write_text(json.dumps(catalog, ensure_ascii=False, indent=1),
+                         encoding="utf-8")
+    temporary.replace(output / "catalog.json")
+    return 0
 
 
 if __name__ == "__main__":
