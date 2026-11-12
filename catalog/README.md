@@ -22,6 +22,8 @@ Edit `books.json`. A work has a `category` (shown in the app as is; works with t
 | `partsFrom` | Instead of `pages`: an index page whose links to pages starting with its own title are the parts, in order. Links to pages that don't exist are skipped. |
 | `partsPrefix` | With `partsFrom`, when the parts' titles start differently from the index page's (for example `كتاب الأم - المجلدالثاني1`). |
 
+`partsFrom` must name the index page itself, not a redirect to it: the API returns a redirect page without its links. Muwatta's index is `الموطأ`, although its parts are named `موطأ الإمام مالك/…`.
+
 Push to `main`, and the GitHub Action rebuilds and publishes the catalog. Remove a book by deleting it; its EPUB is removed on the next run.
 
 ## How it uses Wikisource

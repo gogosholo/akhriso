@@ -44,7 +44,7 @@
       "headings": "kitab-bab",
       "books": [
         {"id": "muwatta-malik", "title": "موطأ الإمام مالك", "popular": 7,
-         "partsFrom": "موطأ الإمام مالك", "partsPrefix": "موطأ الإمام مالك/"}
+         "partsFrom": "الموطأ", "partsPrefix": "موطأ الإمام مالك/"}
       ]
     },
     {
