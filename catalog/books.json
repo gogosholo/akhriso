@@ -1,15 +1,58 @@
 {
   "_comment": [
-    "Akhriso's book list. Every book is a volume or part of a work on Arabic Wikisource (ar.wikisource.org).",
-    "Titles, authors and text are taken from Wikisource exactly as written. See README.md."
+    "Akhriso's book list. Every book is a work, volume or part on Arabic Wikisource (ar.wikisource.org).",
+    "Titles, authors and text are taken from Wikisource exactly as written. See README.md.",
+    "Works that share a category are shown together in the app. popular: 1 is the best known; those books fill the Popular shelf in that order."
   ],
   "works": [
     {
-      "category": "كتاب الأم",
+      "category": "الحديث النبوي",
+      "author": "البخاري",
+      "books": [
+        {"id": "sahih-al-bukhari", "title": "صحيح البخاري", "popular": 1,
+         "partsFrom": "صحيح البخاري", "partsPrefix": "صحيح البخاري/"}
+      ]
+    },
+    {
+      "category": "الحديث النبوي",
+      "author": "مسلم بن الحجاج",
+      "headings": "kitab-bab",
+      "books": [
+        {"id": "sahih-muslim", "title": "صحيح مسلم", "popular": 2,
+         "partsFrom": "صحيح مسلم", "partsPrefix": "صحيح مسلم/"}
+      ]
+    },
+    {
+      "category": "الحديث النبوي",
+      "author": "يحيى النووي",
+      "books": [
+        {"id": "al-arbain-al-nawawiyya", "title": "الأربعون النووية", "popular": 3, "featured": true,
+         "pages": ["الأربعون النووية"]}
+      ]
+    },
+    {
+      "category": "الحديث النبوي",
+      "author": "البخاري",
+      "books": [
+        {"id": "al-adab-al-mufrad", "title": "الأدب المفرد", "popular": 4,
+         "partsFrom": "الأدب المفرد", "partsPrefix": "الأدب المفرد/"}
+      ]
+    },
+    {
+      "category": "الحديث النبوي",
+      "author": "مالك بن أنس",
+      "headings": "kitab-bab",
+      "books": [
+        {"id": "muwatta-malik", "title": "موطأ الإمام مالك", "popular": 7,
+         "partsFrom": "موطأ الإمام مالك", "partsPrefix": "موطأ الإمام مالك/"}
+      ]
+    },
+    {
+      "category": "الفقه الشافعي",
       "author": "الشافعي",
       "headings": "kitab-bab",
       "books": [
-        {"id": "al-umm-01", "title": "كتاب الأم - المجلد الأول", "featured": true, "partsFrom": "كتاب الأم - المجلد الأول"},
+        {"id": "al-umm-01", "title": "كتاب الأم - المجلد الأول", "featured": true, "popular": 8, "partsFrom": "كتاب الأم - المجلد الأول"},
         {"id": "al-umm-02", "title": "كتاب الأم - المجلد الثاني", "partsFrom": "كتاب الأم - المجلد الثاني", "partsPrefix": "كتاب الأم - المجلدالثاني"},
         {"id": "al-umm-03", "title": "كتاب الأم - المجلد الثالث", "partsFrom": "كتاب الأم - المجلد الثالث"},
         {"id": "al-umm-04", "title": "كتاب الأم - المجلد الرابع", "partsFrom": "كتاب الأم - المجلد الرابع"},
@@ -20,7 +63,7 @@
       ]
     },
     {
-      "category": "قواعد الأحكام في مصالح الأنام",
+      "category": "الفقه الشافعي",
       "author": "العز بن عبد السلام",
       "headings": "none",
       "books": [
@@ -30,6 +73,25 @@
          "pages": ["قواعد الأحكام في مصالح الأنام - الجزء الثاني", "قواعد الأحكام في مصالح الأنام - الجزء الثاني2"]},
         {"id": "qawaid-al-ahkam-3", "title": "قواعد الأحكام في مصالح الأنام - الجزء الثالث",
          "pages": ["قواعد الأحكام في مصالح الأنام - الجزء الثالث", "قواعد الأحكام في مصالح الأنام - الجزء الثالث2"]}
+      ]
+    },
+    {
+      "category": "السيرة والهدي النبوي",
+      "author": "ابن قيم الجوزية",
+      "books": [
+        {"id": "zad-al-maad-1", "title": "زاد المعاد - المجلد الأول", "popular": 5, "pages": ["زاد المعاد/المجلد الأول"]},
+        {"id": "zad-al-maad-2", "title": "زاد المعاد - المجلد الثاني", "pages": ["زاد المعاد/المجلد الثاني"]},
+        {"id": "zad-al-maad-3", "title": "زاد المعاد - المجلد الثالث", "pages": ["زاد المعاد/المجلد الثالث"]},
+        {"id": "zad-al-maad-4", "title": "زاد المعاد - المجلد الرابع", "pages": ["زاد المعاد/المجلد الرابع"]},
+        {"id": "zad-al-maad-5", "title": "زاد المعاد - المجلد الخامس", "pages": ["زاد المعاد/المجلد الخامس"]}
+      ]
+    },
+    {
+      "category": "التزكية والآداب",
+      "author": "أبو حامد الغزالي",
+      "books": [
+        {"id": "bidayat-al-hidaya", "title": "بداية الهداية", "popular": 6, "featured": true,
+         "pages": ["بداية الهداية"]}
       ]
     }
   ]

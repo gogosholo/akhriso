@@ -5,18 +5,19 @@ Turns the works listed in `books.json` into the static files the app downloads f
 ## Rules
 
 - **The Arabic is copied exactly.** Titles and authors are written as Wikisource writes them, and the text is not edited.
-- **Only the layout changes.** The website's navigation, headers and download buttons are removed. In works marked `"headings": "kitab-bab"`, short lines that open with كتاب, باب or فصل become headings, so the book has a table of contents.
+- **Only the layout changes.** The website's navigation, headers and download buttons are removed. The page's own headings are kept. In works marked `"headings": "kitab-bab"`, short lines that open with كتاب, باب or فصل (or a number and then one of them, such as "1 - باب …") also become headings, so the book has a table of contents. A line that only links back to the work's index page is removed.
 - **Every book credits its source.** The last page names each Wikisource page with its exact revision and the CC BY-SA 4.0 licence, in Somali. (That page's Somali needs a native speaker's review.)
 
 ## Add a book
 
-Edit `books.json`. A work has a `category` (shown in the app as is), an `author`, a `headings` setting (`kitab-bab` or `none`), and its `books`. Each book has:
+Edit `books.json`. A work has a `category` (shown in the app as is; works with the same category are shown together), an `author`, an optional `headings` setting (`kitab-bab`; leave it out to use only the page's own headings), and its `books`. Each book has:
 
 | Field | Meaning |
 | --- | --- |
 | `id` | Lower-case letters, digits and hyphens. Never change it once published: the app keeps readers' progress by id. |
 | `title` | The Wikisource title of the volume or part. |
 | `featured` | `true` to show it on the app's Featured shelf. |
+| `popular` | Its place on the app's Popular shelf: 1 for the best known, then 2, 3 and so on, each used once. Leave it out to keep the book off that shelf. |
 | `pages` | The Wikisource pages that make the book, in order. |
 | `partsFrom` | Instead of `pages`: an index page whose links to pages starting with its own title are the parts, in order. Links to pages that don't exist are skipped. |
 | `partsPrefix` | With `partsFrom`, when the parts' titles start differently from the index page's (for example `كتاب الأم - المجلدالثاني1`). |

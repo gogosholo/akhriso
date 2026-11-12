@@ -174,14 +174,16 @@ class WikiSource:
 
 
 class OfflineSource:
-    """Reads saved Wikisource pages (<title>.html, as served at /wiki/) from a
+    """Reads saved Wikisource pages (<title>.html, as served at /wiki/, with
+    any "/" in the title written %2F) from a
     folder instead of the API. For testing the script without the network."""
 
     def __init__(self, folder: Path) -> None:
         self.folder = folder
 
     def _read(self, title: str) -> str | None:
-        path = self.folder / f"{title}.html"
+        # A "/" can't be in a file name, so subpages are saved with %2F.
+        path = self.folder / f"{title.replace('/', '%2F')}.html"
         return path.read_text(encoding="utf-8") if path.exists() else None
 
     def latest_revisions(self, titles: list[str]) -> dict[str, int]:
@@ -277,7 +279,7 @@ class _TreeBuilder(HTMLParser):
 class Block:
     """One paragraph-sized piece of text, as XHTML ready for the EPUB."""
 
-    tag: str  # p, h2, h3, blockquote or hr
+    tag: str  # p, h2, h3, h4, blockquote or hr
     inline: str = ""
     plain: str = ""
 
@@ -357,8 +359,14 @@ def page_blocks(page_html: str) -> list[Block]:
                 if not text:
                     continue
                 tag = "blockquote" if child.tag == "blockquote" else "p"
-                if child.tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-                    tag = "h2" if child.tag in {"h1", "h2"} else "h3"
+                if child.tag in {"h1", "h2"}:
+                    tag = "h2"
+                elif child.tag == "h3":
+                    tag = "h3"
+                elif child.tag in {"h4", "h5", "h6"}:
+                    # Small headings such as "شرح وفوائد الحديث" under every
+                    # hadith: shown in the text, left out of the contents.
+                    tag = "h4"
                 blocks.append(Block(tag, markup, text))
             elif child.tag == "br" or (
                 (child.tag in INLINE_KEEP or child.tag in INLINE_UNWRAP)
@@ -377,6 +385,8 @@ def page_blocks(page_html: str) -> list[Block]:
 
 
 _HEADING_WORDS = {"كتاب": "h2", "باب": "h3", "فصل": "h3"}
+# Some works number their chapters: "1 - باب العمل في الوضوء".
+_HEADING_START = re.compile(r"^(?:[0-9٠-٩]+\s*[-–.]\s*)?(كتاب|باب|فصل)\s")
 
 
 def mark_headings(blocks: list[Block]) -> list[Block]:
@@ -384,12 +394,11 @@ def mark_headings(blocks: list[Block]) -> list[Block]:
     The words themselves are not touched."""
     marked = []
     for block in blocks:
-        words = block.plain.split()
-        level = _HEADING_WORDS.get(words[0]) if words else None
+        found = _HEADING_START.match(block.plain)
+        level = _HEADING_WORDS[found.group(1)] if found else None
         if (
             block.tag == "p"
             and level
-            and len(words) > 1
             and len(block.plain) <= HEADING_MAX_CHARS
             and block.plain[-1] not in ".:،؛"
         ):
@@ -397,6 +406,12 @@ def mark_headings(blocks: list[Block]) -> list[Block]:
         else:
             marked.append(block)
     return marked
+
+
+def is_back_link(block: Block, index_title: str | None) -> bool:
+    """A line that only links back to the work's index page, such as
+    ">صحيح مسلم" at the top of each kitab. Site navigation, not text."""
+    return bool(index_title) and block.plain.strip("<>←→ ") == index_title
 
 
 def part_links(page_html: str, prefix: str) -> list[str]:
@@ -463,6 +478,8 @@ def _chapter_body(chapter: Chapter) -> str:
             level = 0 if block.tag == "h2" else 1
             chapter.headings.append((level, anchor, block.plain))
             lines.append(f'<{block.tag} id="{anchor}">{block.inline}</{block.tag}>')
+        elif block.tag == "h4":
+            lines.append(f"<h4>{block.inline}</h4>")
         elif block.tag == "blockquote":
             lines.append(f"<blockquote><p>{block.inline}</p></blockquote>")
         else:
@@ -493,24 +510,40 @@ def _credits_body(title: str, author: str, chapters: list[Chapter],
 
 
 CSS = """body { direction: rtl; }
-h2, h3 { text-align: center; }
+h2, h3, h4 { text-align: center; }
 p { text-align: justify; }
 """
 
 
+def page_label(title: str) -> str:
+    """How a page is named in the contents: a subpage by its own part
+    ("صحيح البخاري/كتاب الإيمان" is "كتاب الإيمان"), any other page by its
+    full title."""
+    return title.rsplit("/", 1)[-1].strip() or title
+
+
 def _toc(chapters: list[Chapter]) -> str:
     """Contents: the headings where a work has them, otherwise one entry per
-    Wikisource page, named as the page is. The nav file sits beside the
-    chapters, so links are relative to text/."""
+    Wikisource page, named as the page is. In a book of several pages whose
+    pages have only smaller headings, each page's headings are grouped under
+    the page's name, so a book of 74 kitabs doesn't list 3,000 babs in a row.
+    The nav file sits beside the chapters, so links are relative to text/."""
     items: list[str] = []
     for chapter in chapters:
         name = chapter.file.split("/")[-1]
+        label = html.escape(page_label(chapter.page.title))
         if not chapter.headings:
-            items.append(f'<li><a href="{name}">'
-                         f"{html.escape(chapter.page.title)}</a></li>")
+            items.append(f'<li><a href="{name}">{label}</a></li>')
+            continue
+        headings = chapter.headings
+        if len(chapters) > 1 and all(level > 0 for level, _, _ in headings):
+            items.append(f'<li><a href="{name}">{label}</a><ol>')
+            items.extend(f'<li><a href="{name}#{anchor}">{html.escape(text)}'
+                         "</a></li>" for _, anchor, text in headings)
+            items.append("</ol></li>")
             continue
         open_section = False
-        for level, anchor, text in chapter.headings:
+        for level, anchor, text in headings:
             link = f'<a href="{name}#{anchor}">{html.escape(text)}</a>'
             if level == 0:
                 if open_section:
@@ -607,7 +640,7 @@ def load_works(path: Path) -> list[dict]:
     works = data.get("works")
     if not isinstance(works, list) or not works:
         raise SystemExit(f"{path.name} lists no works.")
-    ids = set()
+    ids, ranks = set(), set()
     for work in works:
         for key in ("category", "author", "books"):
             if not work.get(key):
@@ -624,6 +657,14 @@ def load_works(path: Path) -> list[dict]:
                                              or book.get("partsFrom")):
                 raise SystemExit(f"Book {book_id} needs a title and either "
                                  "pages or partsFrom.")
+            rank = book.get("popular", 0)
+            if not isinstance(rank, int) or rank < 0:
+                raise SystemExit(f"Book {book_id}: popular must be a whole "
+                                 "number, 1 for the best known.")
+            if rank and rank in ranks:
+                raise SystemExit(f"Book {book_id}: popular rank {rank} is "
+                                 "used twice.")
+            ranks.add(rank)
     return works
 
 
@@ -654,7 +695,8 @@ def build_book(source, work: dict, book: dict, output: Path,
     chapters = []
     for title in pages:
         page = source.page(title, revisions[title])
-        blocks = page_blocks(page.html)
+        blocks = [block for block in page_blocks(page.html)
+                  if not is_back_link(block, book.get("partsFrom"))]
         if work.get("headings") == "kitab-bab":
             blocks = mark_headings(blocks)
         if not blocks:
@@ -675,6 +717,8 @@ def build_book(source, work: dict, book: dict, output: Path,
         "category": work["category"],
         "subjects": [],
         "featured": bool(book.get("featured")),
+        # 1 is the best known. 0 means the book is not on the Popular shelf.
+        "popular": int(book.get("popular") or 0),
         "shortDescription": "",
         "longDescription": "",
         "wordCount": words,
@@ -747,10 +791,14 @@ def main() -> int:
             else:
                 old.unlink()
 
-    categories = [
-        work["category"] for work in works
-        if any(entry["category"] == work["category"] for entry in entries)
-    ]
+    # Several works can share a category; each is listed once, in the order
+    # it first appears in books.json.
+    categories = []
+    for work in works:
+        category = work["category"]
+        if category not in categories and any(
+                entry["category"] == category for entry in entries):
+            categories.append(category)
     catalog = {
         "schemaVersion": 1,
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
