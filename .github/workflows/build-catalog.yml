@@ -7,6 +7,7 @@ on:
       - catalog/books.json
       - catalog/curation.json
       - catalog/build_catalog.py
+      - site/**
   workflow_dispatch:
 
 permissions:
@@ -56,6 +57,11 @@ jobs:
             catalog/output
             catalog/cache
           key: catalog-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # The app's privacy policy and support pages, which the App Store and
+      # Google Play link to. Plain HTML with no scripts.
+      - name: Add the static pages
+        run: cp site/*.html catalog/output/
 
       - name: Upload site
         uses: actions/upload-pages-artifact@v5
